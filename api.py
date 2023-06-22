@@ -1,25 +1,46 @@
-from fastapi import FastAPI, status ,File, UploadFile
+from fastapi import FastAPI, status, File, UploadFile
 from typing import List
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer, util
 import database
-import PyPDF2 
+import PyPDF2
 import os
 import textractplus as tp
 import shutil
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-
+import traceback
 
 class Similarities(BaseModel):
+    """
+    Represents the data model for similarity entries.
+
+    Attributes:
+        original_text (str): The original text for comparison.
+        similar_texts (list): List of similar texts.
+    """
+
     original_text: str
-    similar_texts : list
+    similar_texts: list
 
     def __str__(self):
+        """
+        Returns the string representation of the Similarities object.
+        """
         return "%s %s %s" % (self.original_text, self.summary, self.keywords)
 
 
 def similarity_model(text, docs):
+    """
+    Performs similarity modeling between a query text and a list of document texts.
+
+    Args:
+        text (str): The query text.
+        docs (list): List of document texts.
+
+    Returns:
+        list: Sorted list of document-score pairs based on similarity scores.
+    """
 
     model = SentenceTransformer('sentence-transformers/multi-qa-mpnet-base-dot-v1')
 
@@ -32,24 +53,28 @@ def similarity_model(text, docs):
 
     doc_score_pairs = sorted(doc_score_pairs, key=lambda x: x[1], reverse=True)
 
-    #Output passages & scores
-    #for doc, score in doc_score_pairs:
-    #    print(score, doc)
-
-    #return str(tokenizer.decode(output[0], skip_special_tokens=True))
-
     return doc_score_pairs
 
+
 def pdf_text_extraction(file):
+    """
+    Extracts text from a PDF file.
+
+    Args:
+        file (str): Path to the PDF file.
+
+    Returns:
+        str: Extracted text from the PDF.
+    """
+
     pdf_text = ''
-    pdfFileObj = open(file, 'rb')  
+    pdfFileObj = open(file, 'rb')
     pdfReader = PyPDF2.PdfReader(pdfFileObj)
-    for i in range(0,len(pdfReader.pages)):
-        pageObj = pdfReader.pages[i] 
+    for i in range(0, len(pdfReader.pages)):
+        pageObj = pdfReader.pages[i]
         pdf_text = pdf_text + pageObj.extract_text()
-     
-    pdfFileObj.close() 
-    print(pdf_text)
+
+    pdfFileObj.close()
 
     return pdf_text
 
@@ -58,29 +83,48 @@ similarity_api = FastAPI()
 
 @similarity_api.post("/check_similarities/", status_code=status.HTTP_201_CREATED)
 async def create_similarity(similarity: Similarities):
+    """
+    Creates a similarity entry by comparing the original text with a list of similar texts.
+
+    Args:
+        similarity (Similarities): The similarity data containing original text and similar texts.
+
+    Returns:
+        dict: Similarity results.
+    """
+
     similarity_exists = False
     similarity_dict = similarity.dict()
-    try:   
+
+    try:
         if database.similarities_collection.count_documents({'original_text': similarity_dict['original_text']}) > 0:
-            summary_exists = True
+            similarity_exists = True
             data = database.similarities_collection.find_one({'original_text': similarity_dict['original_text']})
             return data['similar_texts']
 
         elif not similarity_exists:
-            results = similarity_model(similarity_dict['original_text'],similarity_dict['similar_texts'])
+            results = similarity_model(similarity_dict['original_text'], similarity_dict['similar_texts'])
             similarity_dict.update({"similar_texts": results})
             result_db = database.similarities_collection.insert_one(similarity_dict)
             ack = result_db.acknowledged
             return {'similar_texts': results}
 
     except Exception as e:
-        return {"message": "Error Occured","error":str(e)}
+        return {"message": "Error Occurred", "error": str(e)}
 
-# check_simiailatities_pdf POST method using pyPDF2 library to extract text from PDFS and compare for simialrities between extracted texts them and store to database keep in mind # getting error PdfFileReader is deprecated and was removed in PyPDF2 3.0.0. Use PdfReader instead.
-import traceback
 
 @similarity_api.post("/check_similarities_pdf/", status_code=status.HTTP_201_CREATED)
 async def create_similarity_pdf(files: List[UploadFile] = File(...)):
+    """
+    Creates a similarity entry by comparing the text extracted from PDF files.
+
+    Args:
+        files (List[UploadFile]): List of PDF files.
+
+    Returns:
+        dict: Similarity results.
+    """
+
     try:
         similarity_dict = {}
         similarity_exists = False
@@ -101,7 +145,7 @@ async def create_similarity_pdf(files: List[UploadFile] = File(...)):
             # Reset file position to the beginning
             file.file.seek(0)
 
-            pdf_text = pdf_text_extraction(str(tmp_path), encoding='utf-8')
+            pdf_text = pdf_text_extraction(str(tmp_path))
             similarity_dict['original_text'] = pdf_text
 
             if database.similarities_collection.count_documents({'original_text': pdf_text}) > 0:
@@ -124,7 +168,7 @@ async def create_similarity_pdf(files: List[UploadFile] = File(...)):
                 # Reset file position to the beginning
                 file.file.seek(0)
 
-                pdf_text = pdf_text_extraction(str(tmp_path), encoding='utf-8')
+                pdf_text = pdf_text_extraction(str(tmp_path))
                 similarity_results[file.filename] = similarity_model(pdf_text, similarity_dict['original_text'])
 
             similarity_dict['similar_texts'] = similarity_results
@@ -142,6 +186,13 @@ from bson import ObjectId
 
 @similarity_api.get("/similarities/")
 async def get_similarities():
+    """
+    Retrieves all similarity entries from the database.
+
+    Returns:
+        list: List of similarity entries.
+    """
+
     try:
         similarities = []
         for similarity in database.similarities_collection.find():
@@ -151,29 +202,42 @@ async def get_similarities():
     except Exception as e:
         return {"message": "An error occurred", "error": str(e)}
 
+
 @similarity_api.get("/similarities/{id}")
 async def get_similarity(id: str):
+    """
+    Retrieves a specific similarity entry by its ID.
+
+    Args:
+        id (str): The ID of the similarity entry.
+
+    Returns:
+        dict: The similarity entry.
+    """
+
     try:
         similarity = database.similarities_collection.find_one({'_id': ObjectId(id)})  # Convert string to ObjectId
         if similarity:
             similarity['_id'] = str(similarity['_id'])  # Convert ObjectId to string
             return similarity
         else:
-            return {"message": "No similarity found with the given id"}
+            return {"message": "No similarity found with the given ID"}
     except Exception as e:
         return {"message": "An error occurred", "error": str(e)}
 
-# check_simiailatities_files POST method using textractplus library to extract text from files and compare for simialrities between them and store to database
-import textractplus as tp
-import traceback
-from fastapi import status, UploadFile, File
-from tempfile import NamedTemporaryFile
-import shutil
-import os
-from pathlib import Path
 
 @similarity_api.post("/check_similarities_files/", status_code=status.HTTP_201_CREATED)
 async def create_similarity_files(files: List[UploadFile] = File(...)):
+    """
+    Creates a similarity entry by comparing the text extracted from multiple files.
+
+    Args:
+        files (List[UploadFile]): List of files to compare.
+
+    Returns:
+        dict: Similarity results.
+    """
+
     try:
         similarity_dict = {}
         similarity_exists = False
@@ -235,8 +299,13 @@ async def create_similarity_files(files: List[UploadFile] = File(...)):
         return {"message": "An error occurred", "error": str(e), "traceback": error_traceback}
 
 
-
-
 @similarity_api.get("/")
 async def root():
-    return {"message": "Welcome to Text Similarity Detection API"}
+    """
+    Default endpoint.
+
+    Returns:
+        dict: Welcome message.
+    """
+
+    return {"message": "Welcome to the Text Similarity Detection API"}
