@@ -80,7 +80,6 @@ async def create_similarity(similarity: Similarities):
 import traceback
 
 @similarity_api.post("/check_similarities_pdf/", status_code=status.HTTP_201_CREATED)
-@similarity_api.post("/check_similarities_pdf/", status_code=status.HTTP_201_CREATED)
 async def create_similarity_pdf(files: List[UploadFile] = File(...)):
     try:
         similarity_dict = {}
