@@ -10,6 +10,8 @@ import shutil
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 import traceback
+import cleantxty
+import cleantext
 
 class Similarities(BaseModel):
     """
@@ -251,16 +253,16 @@ async def create_similarity_files(files: List[UploadFile] = File(...)):
                 shutil.copyfileobj(file.file, tmp)
                 tmp_path = Path(tmp.name)
 
-            # Check the file size
-            file_size = os.path.getsize(tmp.name)
-
-            if file_size == 0:
-                return {"message": f"Empty file: {file.filename}"}
+            # Check if the file is empty
+            if tmp_path.stat().st_size == 0:
+                return {"message": f"The file '{file.filename}' is empty."}
 
             # Reset file position to the beginning
             file.file.seek(0)
 
             text = tp.process(str(tmp_path))
+            text = cleantxty.clean(str(text))
+            print(text)   
             similarity_dict['original_text'] = text
 
             if database.similarities_collection.count_documents({'original_text': text}) > 0:
@@ -286,6 +288,9 @@ async def create_similarity_files(files: List[UploadFile] = File(...)):
                 file.file.seek(0)
 
                 text = tp.process(str(tmp_path))
+#                text = cleantext.clean(str(text))
+                text = cleantxty.clean(str(text))
+                print("text { ", text,"'end' }")
                 similarity_results[file.filename] = similarity_model(text, similarity_dict['original_text'])
 
             similarity_dict['similar_texts'] = similarity_results
